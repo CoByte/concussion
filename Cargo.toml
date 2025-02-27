@@ -1,9 +1,21 @@
 [package]
-name = "minimal_elfinator"
+name = "concussion"
 version = "0.1.0"
 edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "concussion"
+path = "src/bin.rs"
 
 [dependencies]
 bitflags = "2.8.0"
 bytemuck = "1.21.0"
 iced-x86 = { version = "1.21.0", features = ["code_asm"] }
+
+[dev-dependencies]
+libc = "0.2.170"
+pretty_assertions = "1.4.1"
+tempdir = "0.3.7"
