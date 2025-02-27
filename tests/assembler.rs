@@ -1,13 +1,6 @@
+use concussion::test_helpers::create_and_run_bin;
 use pretty_assertions::assert_eq;
-use tempdir::TempDir;
-
-use std::fs::Permissions;
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::PermissionsExt;
-use std::process::Command;
-use std::thread::sleep;
-use std::time::Duration;
-use std::{collections::HashMap, fs::File, io::Write};
+use std::collections::HashMap;
 
 use concussion::assembler::{
     compile_to_elf, PhdrFlags, Segment, SegmentBuilder,
@@ -78,28 +71,7 @@ fn hello_world() {
     }
 
     let binary = compile_to_elf(&[&DataSegment, &TextSegment]).unwrap();
-
-    let dir = TempDir::new("hello_world").unwrap();
-
-    let elf_path = dir.path().join("elf");
-    let mut elf = File::create(elf_path.clone()).unwrap();
-    elf.write_all(&binary[..]).unwrap();
-
-    elf.set_permissions(Permissions::from_mode(0o755)).unwrap();
-
-    // I don't understand any of this, but it's needed to allow an executable
-    // to be generated and ran
-    // See: https://github.com/rust-lang/rust/issues/114554#issue-1838269767
-    sleep(Duration::from_micros(2));
-    unsafe { libc::flock(elf.as_raw_fd(), libc::LOCK_EX) };
-
-    drop(elf);
-
-    let file = File::open(elf_path.clone()).unwrap();
-    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH) };
-    drop(file);
-
-    let output = Command::new(elf_path).output().unwrap();
+    let output = create_and_run_bin(&binary[..]);
 
     assert_eq!(output.stdout, HELLO);
 }
