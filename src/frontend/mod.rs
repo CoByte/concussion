@@ -1,1 +1,2 @@
-mod parser;
+pub mod ir;
+pub mod parser;
