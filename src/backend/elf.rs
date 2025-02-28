@@ -103,7 +103,7 @@ impl Segment {
 #[macro_export]
 macro_rules! segment {
     ($code:expr, $($label:ident),*) => {
-        $crate::assembler::Segment::new(
+        $crate::backend::elf::Segment::new(
             $code,
             vec![$((stringify!($label), $label)),+]
         )

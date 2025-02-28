@@ -13,6 +13,7 @@ path = "src/bin.rs"
 [dependencies]
 bitflags = "2.8.0"
 bytemuck = "1.21.0"
+derive_more = {version = "2.0.1", features = ["try_from"] }
 iced-x86 = { version = "1.21.0", features = ["code_asm"] }
 libc = "0.2.170"
 tempdir = "0.3.7"

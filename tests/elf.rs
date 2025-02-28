@@ -2,7 +2,7 @@ use concussion::test_helpers::create_and_run_bin;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 
-use concussion::assembler::{
+use concussion::backend::elf::{
     compile_to_elf, PhdrFlags, Segment, SegmentBuilder,
 };
 use concussion::segment;
