@@ -8,15 +8,28 @@ use iced_x86::{
     },
     IcedError,
 };
+use thiserror::Error;
 
 use crate::{
     frontend::parser::{Instruction, IR},
     segment,
 };
 
-use super::elf::{PhdrFlags, SegmentBuilder};
+use super::elf::{compile_to_elf, LabelMap, PhdrFlags, SegmentBuilder};
 
 use code_asm as asm;
+
+#[derive(Error, Debug)]
+pub enum CompilerError {
+    #[error("could not generate asm: {0}")]
+    Assemble(#[from] IcedError),
+    #[error("missing patch")]
+    MissingPatch,
+    #[error("missing _start label")]
+    MissingEntryPoint,
+    #[error("missing label: {0}")]
+    MissingLabel(&'static str),
+}
 
 const CELL_BUFFER_LENGTH: u32 = 30_000;
 
@@ -28,7 +41,7 @@ fn emit_shift_left(
 ) -> Result<(), IcedError> {
     let mut l = a.create_label();
 
-    a.sub(asm::ecx, amount)?;
+    a.lea(asm::rcx, asm::rcx - amount)?;
     a.jno(l)?;
     a.sub(asm::ecx, u32::MAX - CELL_BUFFER_LENGTH)?;
 
@@ -39,14 +52,15 @@ fn emit_shift_left(
 
 fn emit_shift_right(
     a: &mut CodeAssembler,
+    base: u32,
     amount: u32, // precondition: amount <= |CELL_BUFFER_LENGTH|
 ) -> Result<(), IcedError> {
     let mut l = a.create_label();
 
-    a.add(asm::ecx, amount)?;
-    a.cmp(asm::ecx, CELL_BUFFER_LENGTH)?;
-    a.jl(l)?;
-    a.add(asm::ecx, u32::MAX - CELL_BUFFER_LENGTH)?;
+    a.lea(asm::rcx, asm::rcx + amount)?;
+    a.cmp(asm::ecx, base + CELL_BUFFER_LENGTH)?;
+    a.jb(l)?;
+    a.sub(asm::ecx, CELL_BUFFER_LENGTH)?;
 
     a.set_label(&mut l)?;
 
@@ -61,16 +75,19 @@ fn emit_add(a: &mut CodeAssembler, amount: u8) -> Result<(), IcedError> {
 }
 
 fn emit_sub(a: &mut CodeAssembler, amount: u8) -> Result<(), IcedError> {
-    a.add(asm::byte_ptr(asm::rcx), amount as u32)?;
+    a.sub(asm::byte_ptr(asm::rcx), amount as u32)?;
 
     Ok(())
 }
 
 fn emit_write(a: &mut CodeAssembler) -> Result<(), IcedError> {
+    a.mov(asm::r15, asm::rcx)?;
     a.mov(asm::rax, 1u64)?;
     a.mov(asm::rdi, 1u64)?;
     a.mov(asm::rsi, asm::rcx)?;
     a.mov(asm::rdx, 1u64)?;
+    a.syscall()?;
+    a.mov(asm::rcx, asm::r15)?;
 
     Ok(())
 }
@@ -101,22 +118,44 @@ fn emit_jump_backward(
     Ok(())
 }
 
-struct Compiler {
+struct DataSegment;
+
+impl SegmentBuilder for DataSegment {
+    fn code(
+        &self,
+        _labels: &LabelMap,
+    ) -> Result<super::elf::Segment, CompilerError> {
+        let mut a = CodeAssembler::new(64)?;
+
+        let mut cell_buffer = a.create_label();
+        a.set_label(&mut cell_buffer)?;
+        a.db(&[0u8; CELL_BUFFER_LENGTH as usize])?;
+
+        Ok(segment!(a, cell_buffer))
+    }
+
+    fn flags(&self) -> PhdrFlags {
+        PhdrFlags::R | PhdrFlags::W
+    }
+}
+
+struct TextSegment {
     instructions: IR,
 }
 
-impl SegmentBuilder for Compiler {
+impl SegmentBuilder for TextSegment {
     fn code(
         &self,
-        labels: &HashMap<&'static str, u64>,
-    ) -> Result<super::elf::Segment, iced_x86::IcedError> {
+        labels: &LabelMap,
+    ) -> Result<super::elf::Segment, CompilerError> {
         let mut a = CodeAssembler::new(64)?;
 
         let mut _start = a.create_label();
         a.set_label(&mut _start)?;
 
         // setup
-        a.mov(asm::rcx, *labels.get("cell_buffer").unwrap())?;
+        let buffer_start = labels.get("cell_buffer")?;
+        a.mov(asm::rcx, buffer_start)?;
 
         let mut jump_labels: HashMap<u64, CodeLabel> = self
             .instructions
@@ -135,12 +174,14 @@ impl SegmentBuilder for Compiler {
             use Instruction as I;
             match instr {
                 I::ShiftLeft(v) => {
-                    let v: u32 = (*v).try_into().unwrap();
-                    emit_shift_left(&mut a, v % CELL_BUFFER_LENGTH)?
-                } // bad!!!!
+                    let v: u32 =
+                        (v % CELL_BUFFER_LENGTH as u64).try_into().unwrap();
+                    emit_shift_left(&mut a, v)?
+                }
                 I::ShiftRight(v) => {
-                    let v: u32 = (*v).try_into().unwrap();
-                    emit_shift_right(&mut a, v % CELL_BUFFER_LENGTH)?
+                    let v: u32 =
+                        (v % CELL_BUFFER_LENGTH as u64).try_into().unwrap();
+                    emit_shift_right(&mut a, buffer_start as u32, v)?
                 }
                 I::Add(v) => emit_add(&mut a, *v)?,
                 I::Sub(v) => emit_sub(&mut a, *v)?,
@@ -159,8 +200,10 @@ impl SegmentBuilder for Compiler {
             }
         }
 
-        // instructions may emit tailing label
-        a.zero_bytes()?;
+        // end!
+        a.mov(asm::rax, 60u64)?;
+        a.mov(asm::rdi, 0u64)?;
+        a.syscall()?;
 
         Ok(segment!(a, _start))
     }
@@ -168,4 +211,10 @@ impl SegmentBuilder for Compiler {
     fn flags(&self) -> super::elf::PhdrFlags {
         PhdrFlags::X | PhdrFlags::R
     }
+}
+
+pub fn compile(ir: IR) -> Result<Vec<u8>, CompilerError> {
+    let ts = TextSegment { instructions: ir };
+
+    compile_to_elf(&[&DataSegment, &ts])
 }

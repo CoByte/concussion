@@ -1,11 +1,13 @@
+use concussion::backend::compiler::CompilerError;
 use concussion::test_helpers::create_and_run_bin;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::result::Result;
 
 use concussion::backend::elf::{
-    compile_to_elf, PhdrFlags, Segment, SegmentBuilder,
+    compile_to_elf, LabelMap, PhdrFlags, Segment, SegmentBuilder,
 };
-use concussion::segment;
+use concussion::{backend, segment};
 use iced_x86::{
     code_asm::{self, CodeAssembler},
     IcedError,
@@ -18,10 +20,7 @@ fn hello_world() {
     struct DataSegment;
 
     impl SegmentBuilder for DataSegment {
-        fn code(
-            &self,
-            _labels: &HashMap<&'static str, u64>,
-        ) -> Result<Segment, IcedError> {
+        fn code(&self, _labels: &LabelMap) -> Result<Segment, CompilerError> {
             let mut a = CodeAssembler::new(64)?;
 
             let mut hello = a.create_label();
@@ -39,13 +38,10 @@ fn hello_world() {
     struct TextSegment;
 
     impl SegmentBuilder for TextSegment {
-        fn code(
-            &self,
-            labels: &HashMap<&'static str, u64>,
-        ) -> Result<Segment, IcedError> {
+        fn code(&self, labels: &LabelMap) -> Result<Segment, CompilerError> {
             use code_asm as asm;
 
-            let hello = labels["hello"];
+            let hello = labels.get("hello")?;
 
             let mut a = CodeAssembler::new(64)?;
 

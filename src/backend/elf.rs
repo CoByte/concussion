@@ -5,8 +5,10 @@ use bitflags::bitflags;
 use bytemuck::{bytes_of, Pod};
 use iced_x86::{
     code_asm::{CodeAssembler, CodeLabel},
-    BlockEncoderOptions, IcedError,
+    BlockEncoderOptions,
 };
+
+use super::compiler::CompilerError;
 
 struct BinaryBuilder {
     binary: Vec<u8>,
@@ -69,11 +71,11 @@ impl BinaryBuilder {
             .copy_from_slice(bytes_of(&bytes));
     }
 
-    fn build(self) -> Result<Vec<u8>, ()> {
+    fn build(self) -> Result<Vec<u8>, CompilerError> {
         if self.outstanding_patches == 0 {
             Ok(self.binary)
         } else {
-            Err(())
+            Err(CompilerError::MissingPatch)
         }
     }
 }
@@ -100,6 +102,17 @@ impl Segment {
     }
 }
 
+pub struct LabelMap(HashMap<&'static str, u64>);
+
+impl LabelMap {
+    pub fn get(&self, name: &'static str) -> Result<u64, CompilerError> {
+        self.0
+            .get(name)
+            .ok_or(CompilerError::MissingLabel(name))
+            .copied()
+    }
+}
+
 #[macro_export]
 macro_rules! segment {
     ($code:expr, $($label:ident),*) => {
@@ -111,18 +124,15 @@ macro_rules! segment {
 }
 
 pub trait SegmentBuilder {
-    fn code(
-        &self,
-        labels: &HashMap<&'static str, u64>,
-    ) -> Result<Segment, IcedError>;
+    fn code(&self, labels: &LabelMap) -> Result<Segment, CompilerError>;
 
     fn flags(&self) -> PhdrFlags;
 
     fn build(
         &self,
         ip: u64,
-        labels: &mut HashMap<&'static str, u64>,
-    ) -> Result<Vec<u8>, IcedError> {
+        labels: &mut LabelMap,
+    ) -> Result<Vec<u8>, CompilerError> {
         let Segment {
             mut code,
             labels: new_labels,
@@ -134,14 +144,16 @@ pub trait SegmentBuilder {
         )?;
 
         for (name, label) in new_labels {
-            labels.insert(name, result.label_ip(&label)?);
+            labels.0.insert(name, result.label_ip(&label)?);
         }
 
         Ok(result.inner.code_buffer)
     }
 }
 
-pub fn compile_to_elf(segments: &[&dyn SegmentBuilder]) -> Result<Vec<u8>, ()> {
+pub fn compile_to_elf(
+    segments: &[&dyn SegmentBuilder],
+) -> Result<Vec<u8>, CompilerError> {
     if cfg!(target_endian = "big") {
         panic!("Program is not valid on big-endian architecture!");
     }
@@ -193,13 +205,13 @@ pub fn compile_to_elf(segments: &[&dyn SegmentBuilder]) -> Result<Vec<u8>, ()> {
     b.pad_to_width(PAGE_SIZE as usize); // get the thing right
 
     // === SEGMENTS ===
-    let mut labels: HashMap<&'static str, u64> = HashMap::new();
+    let mut labels = LabelMap(HashMap::new());
     for (seg, patches) in segments.iter().zip(seg_patches) {
         let [offset, vaddr, file_size, mem_size] = patches;
 
         let file_offset = b.current_addr() as u64;
         let vmem_offset = file_offset + LOAD_POS;
-        let source = seg.build(vmem_offset, &mut labels).or(Err(()))?;
+        let source = seg.build(vmem_offset, &mut labels)?;
 
         b.patch(offset, file_offset);
         b.patch(vaddr, vmem_offset);
@@ -210,7 +222,7 @@ pub fn compile_to_elf(segments: &[&dyn SegmentBuilder]) -> Result<Vec<u8>, ()> {
         b.pad_to_width(PAGE_SIZE as usize);
     }
 
-    b.patch(entry_point, *labels.get("_start").ok_or(())?);
+    b.patch(entry_point, labels.get("_start")?);
 
     b.build()
 }

@@ -1,5 +1,6 @@
 use derive_more::TryFrom;
 use itertools::Itertools;
+use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, TryFrom)]
 #[try_from(repr)]
@@ -15,7 +16,7 @@ enum Command {
     JmpB = b']',
 }
 
-struct Program {
+pub struct Program {
     instrs: Vec<Command>,
 }
 
@@ -27,8 +28,7 @@ impl From<&str> for Program {
     }
 }
 
-// TODO(rwheary): this is such ass :3
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Instruction {
     ShiftLeft(u64),
     ShiftRight(u64),
@@ -40,9 +40,15 @@ pub enum Instruction {
     JumpBackward(u64),
 }
 
+#[derive(Error, Debug)]
+pub enum ParseError {
+    #[error("Missing matching brace for {0} at position: {1}")]
+    NestingError(char, usize),
+}
+
 pub struct IR(pub Vec<Instruction>);
 
-fn compute_jumps(instrs: &mut [Instruction]) -> Result<(), ()> {
+fn compute_jumps(instrs: &mut [Instruction]) -> Result<(), ParseError> {
     use Instruction as I;
     fn find_bracket_offset(
         mut subprogram: impl Iterator<Item = Instruction>,
@@ -60,18 +66,17 @@ fn compute_jumps(instrs: &mut [Instruction]) -> Result<(), ()> {
     }
 
     for pc in 0..instrs.len() {
+        let po = pc as u64;
         instrs[pc] = match instrs[pc] {
             I::JumpForward(_) => I::JumpForward(
-                find_bracket_offset(instrs[pc..].iter().copied())
-                    .ok_or(())?
-                    .try_into()
-                    .map_err(|_| ())?,
+                po + find_bracket_offset(instrs[pc..].iter().copied())
+                    .ok_or(ParseError::NestingError('[', pc))?
+                    as u64,
             ),
-            I::JumpBackward(_) => I::JumpForward(
-                find_bracket_offset(instrs[..pc].iter().rev().copied())
-                    .ok_or(())?
-                    .try_into()
-                    .map_err(|_| ())?,
+            I::JumpBackward(_) => I::JumpBackward(
+                po - find_bracket_offset(instrs[..=pc].iter().rev().copied())
+                    .ok_or(ParseError::NestingError(']', pc))?
+                    as u64,
             ),
             v => v,
         };
@@ -81,7 +86,7 @@ fn compute_jumps(instrs: &mut [Instruction]) -> Result<(), ()> {
 }
 
 impl IR {
-    fn parse(program: &Program) -> Result<Self, ()> {
+    pub fn parse(program: &Program) -> Result<Self, ParseError> {
         use Command as C;
         use Instruction as I;
         let mut parsed: Vec<_> = program
@@ -104,7 +109,7 @@ impl IR {
                 C::Writ => I::Write,
                 C::Read => I::Read,
                 C::JmpF => I::JumpForward(0),
-                C::JmpB => I::JumpForward(0),
+                C::JmpB => I::JumpBackward(0),
             })
             .collect();
 
