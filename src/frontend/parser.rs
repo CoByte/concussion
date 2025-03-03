@@ -40,7 +40,7 @@ pub enum Instruction {
     JumpBackward(u64),
 }
 
-struct IR(Vec<Instruction>);
+pub struct IR(pub Vec<Instruction>);
 
 fn compute_jumps(instrs: &mut [Instruction]) -> Result<(), ()> {
     use Instruction as I;
@@ -87,12 +87,14 @@ impl IR {
         let mut parsed: Vec<_> = program
             .instrs
             .iter()
-            .dedup_by_with_count(|l, r| match (l, r) {
-                (C::Movr, C::Movr)
-                | (C::Movl, C::Movl)
-                | (C::Incr, C::Incr)
-                | (C::Decr, C::Decr) => true,
-                _ => false,
+            .dedup_by_with_count(|l, r| {
+                matches!(
+                    (l, r),
+                    (C::Movr, C::Movr)
+                        | (C::Movl, C::Movl)
+                        | (C::Incr, C::Incr)
+                        | (C::Decr, C::Decr)
+                )
             })
             .map(|(count, code)| match code {
                 C::Movr => I::ShiftRight(count as u64),
@@ -106,7 +108,7 @@ impl IR {
             })
             .collect();
 
-        compute_jumps(&mut parsed[..]);
+        compute_jumps(&mut parsed[..])?;
 
         Ok(IR(parsed))
     }
