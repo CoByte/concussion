@@ -3,7 +3,9 @@ use std::{collections::HashMap, u32};
 use iced_x86::{
     code_asm::{
         self,
-        asm_traits::{CodeAsmAdd, CodeAsmMov, CodeAsmSub, CodeAsmZero_bytes},
+        asm_traits::{
+            CodeAsmAdd, CodeAsmInt, CodeAsmMov, CodeAsmSub, CodeAsmZero_bytes,
+        },
         CodeAssembler, CodeLabel,
     },
     IcedError,
@@ -37,13 +39,15 @@ const CELL_BUFFER_LENGTH: u32 = 30_000;
 
 fn emit_shift_left(
     a: &mut CodeAssembler,
+    base: u32,
     amount: u32, // precondition: amount <= |CELL_BUFFER_LENGTH|
 ) -> Result<(), IcedError> {
     let mut l = a.create_label();
 
     a.lea(asm::rcx, asm::rcx - amount)?;
-    a.jno(l)?;
-    a.sub(asm::ecx, u32::MAX - CELL_BUFFER_LENGTH)?;
+    a.cmp(asm::ecx, base)?;
+    a.jae(l)?;
+    a.lea(asm::rcx, asm::rcx + CELL_BUFFER_LENGTH)?;
 
     a.set_label(&mut l)?;
 
@@ -176,7 +180,7 @@ impl SegmentBuilder for TextSegment {
                 I::ShiftLeft(v) => {
                     let v: u32 =
                         (v % CELL_BUFFER_LENGTH as u64).try_into().unwrap();
-                    emit_shift_left(&mut a, v)?
+                    emit_shift_left(&mut a, buffer_start as u32, v)?
                 }
                 I::ShiftRight(v) => {
                     let v: u32 =
